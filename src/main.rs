@@ -1,3 +1,4 @@
+mod physics;
 use std::sync::Arc;
 
 use std::time::{Duration, Instant};
@@ -9,55 +10,7 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
-
-    fn update(&mut self) {
-        for color in &mut self.color {
-            *color = 1f32.min(*color + 0.01);
-        }
-    }
-}
-
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        position: [-0.0868241, 0.49240386, 0.0],
-        color: [1., 0., 0.],
-    },
-    Vertex {
-        position: [-0.49513406, 0.06958647, 0.0],
-        color: [0., 1., 0.],
-    },
-    Vertex {
-        position: [-0.21918549, -0.44939706, 0.0],
-        color: [0., 0., 1.],
-    },
-    Vertex {
-        position: [0.35966998, -0.3473291, 0.0],
-        color: [1., 0., 1.],
-    },
-    Vertex {
-        position: [0.44147372, 0.2347359, 0.0],
-        color: [1., 1., 0.],
-    },
-];
-const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
+use physics::{generate_circle_vertices, Vertex};
 
 struct State {
     window: Arc<Window>,
@@ -67,9 +20,11 @@ struct State {
     surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
     render_pipeline: wgpu::RenderPipeline,
+
     vertices: Vec<Vertex>,
+    indices: Vec<u16>,
+
     vertex_buffer: wgpu::Buffer,
-    num_indices: u32,
     index_buffer: wgpu::Buffer,
 
     last_frame_time: Instant,
@@ -145,21 +100,18 @@ impl State {
             cache: None,
         });
 
-        let vertices = VERTICES.to_vec();
-
+        let (vertices, indices) = generate_circle_vertices(0.5, 100);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
-            usage: wgpu::BufferUsages::INDEX,
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         });
-
-        let num_indices = INDICES.len() as u32;
 
         let state = State {
             window,
@@ -169,9 +121,11 @@ impl State {
             surface,
             surface_format,
             render_pipeline,
+
             vertices,
+            indices,
+
             vertex_buffer,
-            num_indices,
             index_buffer,
 
             last_frame_time: Instant::now(),
@@ -274,7 +228,7 @@ impl State {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
         }
 
         // Submit commands
