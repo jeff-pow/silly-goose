@@ -1,6 +1,7 @@
 mod physics;
 use std::sync::Arc;
 
+use physics::{Shapes, Vertex};
 use std::time::{Duration, Instant};
 use wgpu::{include_wgsl, Color, PipelineCompilationOptions};
 use winit::{
@@ -9,7 +10,6 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
-use physics::{ polygon, Shapes, Vertex};
 
 struct State {
     window: Arc<Window>,
@@ -50,7 +50,11 @@ impl State {
 
         let surface = instance.create_surface(window.clone()).unwrap();
         let cap = surface.get_capabilities(&adapter);
-        let surface_format = cap.formats[0];
+        let surface_format = cap
+            .formats
+            .into_iter()
+            .find(|f| matches!(f, wgpu::TextureFormat::Rgba8Unorm))
+            .unwrap();
 
         let shader = device.create_shader_module(include_wgsl!("shader.wgsl"));
 
@@ -74,7 +78,18 @@ impl State {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: PipelineCompilationOptions::default(),
@@ -99,13 +114,11 @@ impl State {
         });
 
         let mut shapes = Shapes::new();
-        let c1 = polygon(0.15, 4, [-0.5, 0., 0.]);
-        let c2 = polygon(0.15, 72, [0.5, 0., 0.]);
-        shapes.add_shape(c1.0, c1.1);
-        dbg!(&shapes);
-        println!("-------------------------------------------------------------------");
-        shapes.add_shape(c2.0, c2.1);
-        dbg!(&shapes);
+        shapes.create_border(0.85, 16, [0., 0., 0.]);
+        //let c1 = polygon(0.15, 4, [-0.5, 0., 0.]);
+        //let c2 = polygon(0.15, 72, [0.5, 0., 0.]);
+        //shapes.add_shape(c1.0, c1.1);
+        //shapes.add_shape(c2.0, c2.1);
 
         let (vertex_buffer, index_buffer) = shapes.create_gpu_buffers(&device);
 
@@ -144,8 +157,8 @@ impl State {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: self.surface_format,
             // Request compatibility with the sRGB-format texture view we‘re going to create later.
-            view_formats: vec![self.surface_format.add_srgb_suffix()],
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![self.surface_format],
+            alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
             width: self.size.width,
             height: self.size.height,
             desired_maximum_frame_latency: 2,
@@ -193,7 +206,7 @@ impl State {
             .get_current_texture()
             .expect("failed to acquire next swapchain texture");
         let texture_view = surface_texture.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.surface_format.add_srgb_suffix()),
+            format: Some(self.surface_format),
             ..Default::default()
         });
 
@@ -207,9 +220,9 @@ impl State {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.13,
+                            g: 0.15,
+                            b: 0.18,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -225,17 +238,15 @@ impl State {
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
             // Iterate through shapes and render them
-             let mut index_offset = 0;
+            let mut index_offset = 0;
             for i in 0..self.shapes.shape_offsets.len() {
-
-
-                let index_count : u32 = if i < self.shapes.shape_offsets.len() - 1 {
-                    self.shapes.shape_offsets[i+1] - self.shapes.shape_offsets[i]
+                let index_count: u32 = if i < self.shapes.shape_offsets.len() - 1 {
+                    self.shapes.shape_offsets[i + 1] - self.shapes.shape_offsets[i]
                 } else {
                     (self.shapes.indices.len() as u32) - self.shapes.shape_offsets[i]
                 };
 
-                render_pass.draw_indexed(index_offset..(index_offset+index_count), 0, 0..1);
+                render_pass.draw_indexed(index_offset..(index_offset + index_count), 0, 0..1);
                 index_offset += index_count;
             }
         }

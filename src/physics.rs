@@ -19,16 +19,13 @@ impl Shapes {
     }
 
     pub fn add_shape(&mut self, shape_vertices: Vec<Vertex>, shape_indices: Vec<u32>) {
-        let shape_offset = self.vertices.len();
-        // Store the offset into the **index** buffer where this shape's indices begin.
         self.shape_offsets.push(self.indices.len() as u32);
 
-        //Extend the global vertex list
+        let vertex_offset = self.vertices.len();
         self.vertices.extend(shape_vertices);
 
-        //Extend the index buffer, the vertices are already adjusted
         self.indices
-            .extend(shape_indices.iter().map(|&v| v + shape_offset as u32));
+            .extend(shape_indices.iter().map(|&v| v + vertex_offset as u32));
     }
 
     pub fn create_gpu_buffers(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::Buffer) {
@@ -50,17 +47,36 @@ impl Shapes {
     pub fn update_vertex_colors(&mut self) {
         self.vertices.iter_mut().for_each(Vertex::update);
     }
+
+    pub fn create_border(&mut self, radius: f32, num_subdivisions: u32, center: [f32; 3]) {
+        let angle_increment = (2. * PI) / num_subdivisions as f32;
+        let mut indices = Vec::new();
+
+        for i in 0..num_subdivisions {
+            let angle = i as f32 * angle_increment;
+            let x = angle.cos() * radius + center[0];
+            let y = angle.sin() * radius + center[1];
+            let dot = polygon(0.015, 32, [x, y, 0.], [0.311, 0.311, 0.311, 0.3]);
+            self.add_shape(dot.0, dot.1);
+        }
+
+        for i in 0..num_subdivisions {
+            let i0 = i;
+            let i1 = (i + 1) % num_subdivisions;
+            indices.extend([i0, i1, 0]);
+        }
+    }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    color: [f32; 4],
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
 
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -71,13 +87,14 @@ impl Vertex {
     }
 
     pub fn update(&mut self) {
-        for color in &mut self.color {
-            *color = 1f32.min(*color + 0.01);
-        }
+        //self.position[1] = (self.position[1] - 0.001).max(-1.0);
+        //for color in &mut self.color {
+        //    *color = 1f32.min(*color + 0.005);
+        //}
     }
 }
 
-pub fn polygon(radius: f32, num_subdivisions: u32, center: [f32; 3]) -> (Vec<Vertex>, Vec<u32>) {
+pub fn polygon(radius: f32, num_subdivisions: u32, center: [f32; 3], color: [f32; 4]) -> (Vec<Vertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     let angle_increment = (2. * PI) / num_subdivisions as f32;
     let mut indices = Vec::new();
@@ -88,7 +105,7 @@ pub fn polygon(radius: f32, num_subdivisions: u32, center: [f32; 3]) -> (Vec<Ver
         let y = angle.sin() * radius + center[1];
         vertices.push(Vertex {
             position: [x, y, 0.],
-            color: [1., 0., 0.],
+            color,
         });
     }
 
