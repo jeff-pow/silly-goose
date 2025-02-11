@@ -1,9 +1,55 @@
+use std::f32::consts::PI;
+use wgpu::util::DeviceExt;
+
 #[repr(C)]
 #[derive(Clone, Debug)]
-pub struct SimulationData {
-    vertices: Vec<Vertex>,
-    indices: Vec<u16>,       // or u16, depending on the number of vertices
-    shape_offsets: Vec<u32>, // Offset into vertex and index buffers for each shape
+pub struct Shapes {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,       // or u16, depending on the number of vertices
+    pub shape_offsets: Vec<u32>, // Offset into vertex and index buffers for each shape
+}
+
+impl Shapes {
+    pub fn new() -> Self {
+        Shapes {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            shape_offsets: Vec::new(),
+        }
+    }
+
+    pub fn add_shape(&mut self, shape_vertices: Vec<Vertex>, shape_indices: Vec<u32>) {
+        let shape_offset = self.vertices.len();
+        // Store the offset into the **index** buffer where this shape's indices begin.
+        self.shape_offsets.push(self.indices.len() as u32);
+
+        //Extend the global vertex list
+        self.vertices.extend(shape_vertices);
+
+        //Extend the index buffer, the vertices are already adjusted
+        self.indices
+            .extend(shape_indices.iter().map(|&v| v + shape_offset as u32));
+    }
+
+    pub fn create_gpu_buffers(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::Buffer) {
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&self.vertices),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&self.indices),
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        (vertex_buffer, index_buffer)
+    }
+
+    pub fn update_vertex_colors(&mut self) {
+        self.vertices.iter_mut().for_each(Vertex::update);
+    }
 }
 
 #[repr(C)]
@@ -31,42 +77,25 @@ impl Vertex {
     }
 }
 
-pub fn generate_circle_vertices(radius: f32, segments: u32) -> (Vec<Vertex>, Vec<u16>) {
-    let mut vertices = Vec::with_capacity((segments + 1) as usize);
-    let mut indices = Vec::with_capacity((segments * 3) as usize);
+pub fn polygon(radius: f32, num_subdivisions: u32, center: [f32; 3]) -> (Vec<Vertex>, Vec<u32>) {
+    let mut vertices = Vec::new();
+    let angle_increment = (2. * PI) / num_subdivisions as f32;
+    let mut indices = Vec::new();
 
-    // Center vertex
-    vertices.push(Vertex {
-        position: [0.0, 0.0, 0.0],
-        color: [1.0, 1.0, 1.0],
-    });
-
-    // Generate vertices around the circle
-    for i in 0..segments {
-        let angle = (i as f32 * 2.0 * std::f32::consts::PI) / segments as f32;
-        let x = radius * angle.cos();
-        let y = radius * angle.sin();
-
+    for i in 0..num_subdivisions {
+        let angle = i as f32 * angle_increment;
+        let x = angle.cos() * radius + center[0];
+        let y = angle.sin() * radius + center[1];
         vertices.push(Vertex {
-            position: [x, y, 0.0],
-            color: [1.0, 1.0, 1.0], // White color
+            position: [x, y, 0.],
+            color: [1., 0., 0.],
         });
+    }
 
-        // Generate indices for triangles
-        if i < segments - 1 {
-            indices.extend_from_slice(&[
-                0,              // Center
-                (i + 1) as u16, // Current vertex
-                (i + 2) as u16, // Next vertex
-            ]);
-        } else {
-            // Connect last vertex back to first
-            indices.extend_from_slice(&[
-                0,               // Center
-                segments as u16, // Last vertex
-                1,               // Back to first vertex
-            ]);
-        }
+    for i in 0..num_subdivisions {
+        let i0 = i;
+        let i1 = (i + 1) % num_subdivisions;
+        indices.extend([i0, i1, 0]);
     }
 
     (vertices, indices)

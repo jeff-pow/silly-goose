@@ -2,7 +2,6 @@ mod physics;
 use std::sync::Arc;
 
 use std::time::{Duration, Instant};
-use wgpu::util::DeviceExt;
 use wgpu::{include_wgsl, Color, PipelineCompilationOptions};
 use winit::{
     application::ApplicationHandler,
@@ -10,7 +9,7 @@ use winit::{
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     window::{Window, WindowId},
 };
-use physics::{generate_circle_vertices, Vertex};
+use physics::{ polygon, Shapes, Vertex};
 
 struct State {
     window: Arc<Window>,
@@ -21,8 +20,7 @@ struct State {
     surface_format: wgpu::TextureFormat,
     render_pipeline: wgpu::RenderPipeline,
 
-    vertices: Vec<Vertex>,
-    indices: Vec<u16>,
+    shapes: Shapes,
 
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
@@ -100,18 +98,16 @@ impl State {
             cache: None,
         });
 
-        let (vertices, indices) = generate_circle_vertices(0.5, 100);
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
+        let mut shapes = Shapes::new();
+        let c1 = polygon(0.15, 4, [-0.5, 0., 0.]);
+        let c2 = polygon(0.15, 72, [0.5, 0., 0.]);
+        shapes.add_shape(c1.0, c1.1);
+        dbg!(&shapes);
+        println!("-------------------------------------------------------------------");
+        shapes.add_shape(c2.0, c2.1);
+        dbg!(&shapes);
 
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&indices),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-        });
+        let (vertex_buffer, index_buffer) = shapes.create_gpu_buffers(&device);
 
         let state = State {
             window,
@@ -122,8 +118,7 @@ impl State {
             surface_format,
             render_pipeline,
 
-            vertices,
-            indices,
+            shapes,
 
             vertex_buffer,
             index_buffer,
@@ -167,10 +162,10 @@ impl State {
     }
 
     fn update(&mut self) {
-        self.vertices.iter_mut().for_each(Vertex::update);
+        self.shapes.update_vertex_colors();
 
         self.queue
-            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.shapes.vertices));
     }
 
     fn render(&mut self) {
@@ -227,8 +222,22 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            // Iterate through shapes and render them
+             let mut index_offset = 0;
+            for i in 0..self.shapes.shape_offsets.len() {
+
+
+                let index_count : u32 = if i < self.shapes.shape_offsets.len() - 1 {
+                    self.shapes.shape_offsets[i+1] - self.shapes.shape_offsets[i]
+                } else {
+                    (self.shapes.indices.len() as u32) - self.shapes.shape_offsets[i]
+                };
+
+                render_pass.draw_indexed(index_offset..(index_offset+index_count), 0, 0..1);
+                index_offset += index_count;
+            }
         }
 
         // Submit commands
