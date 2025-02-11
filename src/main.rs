@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 use wgpu::{include_wgsl, Color, PipelineCompilationOptions};
 use winit::{
@@ -29,7 +30,7 @@ impl Vertex {
 
     fn update(&mut self) {
         for color in &mut self.color {
-            *color = 1f32.min(*color + 0.001);
+            *color = 1f32.min(*color + 0.01);
         }
     }
 }
@@ -66,9 +67,15 @@ struct State {
     surface: wgpu::Surface<'static>,
     surface_format: wgpu::TextureFormat,
     render_pipeline: wgpu::RenderPipeline,
+    vertices: Vec<Vertex>,
     vertex_buffer: wgpu::Buffer,
     num_indices: u32,
     index_buffer: wgpu::Buffer,
+
+    last_frame_time: Instant,
+    frame_count: u32,
+    last_fps_update: Instant,
+    current_fps: f64,
 }
 
 impl State {
@@ -138,10 +145,12 @@ impl State {
             cache: None,
         });
 
+        let vertices = VERTICES.to_vec();
+
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -160,9 +169,15 @@ impl State {
             surface,
             surface_format,
             render_pipeline,
+            vertices,
             vertex_buffer,
             num_indices,
             index_buffer,
+
+            last_frame_time: Instant::now(),
+            frame_count: 0,
+            last_fps_update: Instant::now(),
+            current_fps: 0.0,
         };
 
         // Configure surface for the first time
@@ -197,7 +212,32 @@ impl State {
         self.configure_surface();
     }
 
+    fn update(&mut self) {
+        self.vertices.iter_mut().for_each(Vertex::update);
+
+        self.queue
+            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
+    }
+
     fn render(&mut self) {
+        self.update();
+
+        // Update FPS calculation
+        self.frame_count += 1;
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_fps_update);
+
+        // Update FPS every second
+        if elapsed >= Duration::from_secs(1) {
+            self.current_fps = self.frame_count as f64 / elapsed.as_secs_f64();
+            println!("FPS: {:.2}", self.current_fps);
+            self.frame_count = 0;
+            self.last_fps_update = now;
+        }
+
+        // Track frame time
+        self.last_frame_time = now;
+
         // Create texture view
         let surface_texture = self
             .surface
