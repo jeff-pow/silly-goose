@@ -1,3 +1,4 @@
+use crate::BORDER_RADIUS;
 use std::f32::consts::PI;
 use wgpu::util::DeviceExt;
 
@@ -11,6 +12,7 @@ pub struct Scene {
     pub dynamic_vertices: Vec<Vertex>,
     pub dynamic_indices: Vec<u32>,
     pub dynamic_shape_offsets: Vec<u32>,
+    dynamic_circle_dims: Vec<(f32, [f32; 3])>,
 }
 
 impl Scene {
@@ -22,10 +24,11 @@ impl Scene {
             dynamic_vertices: Vec::new(),
             dynamic_indices: Vec::new(),
             dynamic_shape_offsets: Vec::new(),
+            dynamic_circle_dims: Vec::new(),
         }
     }
 
-    pub fn add_dynamic_shape(&mut self, shape: Shape) {
+    pub fn add_dynamic_shape(&mut self, shape: Shape, radius: f32, center: [f32; 3]) {
         self.dynamic_shape_offsets.push(self.dynamic_indices.len() as u32);
 
         let vertex_offset = self.dynamic_vertices.len();
@@ -33,6 +36,7 @@ impl Scene {
 
         self.dynamic_indices
             .extend(shape.indices.iter().map(|&v| v + vertex_offset as u32));
+        self.dynamic_circle_dims.push((radius, center));
     }
 
     pub fn add_static_shape(&mut self, shape: Shape) {
@@ -77,10 +81,6 @@ impl Scene {
             (static_vertex_buffer, static_index_buffer),
             (dynamic_vertex_buffer, dynamic_index_buffer),
         )
-    }
-
-    pub fn update_vertex_colors(&mut self) {
-        self.dynamic_vertices.iter_mut().for_each(Vertex::update);
     }
 
     pub fn create_3d_border(&mut self, radius: f32, num_subdivisions: u32, center: [f32; 3]) {
@@ -225,6 +225,4 @@ impl Vertex {
             attributes: &Self::ATTRIBS,
         }
     }
-
-    pub fn update(&mut self) {}
 }
