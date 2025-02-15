@@ -1,7 +1,7 @@
 mod physics;
 use std::sync::Arc;
 
-use physics::{ Scene, Vertex};
+use physics::{Scene, Shape, Vertex};
 use std::time::{Duration, Instant};
 use wgpu::{include_wgsl, Color, PipelineCompilationOptions};
 use winit::{
@@ -22,8 +22,10 @@ struct State {
 
     shapes: Scene,
 
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
+    static_vertex_buffer: wgpu::Buffer,
+    static_index_buffer: wgpu::Buffer,
+    dynamic_vertex_buffer: wgpu::Buffer,
+    dynamic_index_buffer: wgpu::Buffer,
 
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
@@ -122,10 +124,11 @@ impl State {
             cache: None,
         });
 
-        let mut shapes = Scene::new();
-        shapes.create_3d_border(0.85, 5, [0., 0., 0.]);
+        let mut scene = Scene::new();
+        scene.create_3d_border(0.85, 5, [0., 0., 0.]);
+        scene.add_dynamic_shape(Shape::sphere(0.25, 16, [0., 0., 0.], [1., 1., 0., 1.]));
 
-        let (vertex_buffer, index_buffer) = shapes.create_gpu_buffers(&device);
+        let ((svb, sib), (dvb, dib)) = scene.create_gpu_buffers(&device);
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
@@ -152,10 +155,12 @@ impl State {
             surface_format,
             render_pipeline,
 
-            shapes,
+            shapes: scene,
 
-            vertex_buffer,
-            index_buffer,
+            static_vertex_buffer: svb,
+            static_index_buffer: sib,
+            dynamic_vertex_buffer: dvb,
+            dynamic_index_buffer: dib,
 
             depth_texture,
             depth_view,
@@ -217,8 +222,11 @@ impl State {
     fn update(&mut self) {
         self.shapes.update_vertex_colors();
 
-        self.queue
-            .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.shapes.vertices));
+        self.queue.write_buffer(
+            &self.dynamic_vertex_buffer,
+            0,
+            bytemuck::cast_slice(&self.shapes.dynamic_vertices),
+        );
     }
 
     fn render(&mut self) {
@@ -281,20 +289,33 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.set_vertex_buffer(0, self.static_vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.static_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
             // Iterate through shapes and render them
             let mut index_offset = 0;
-            for i in 0..self.shapes.shape_offsets.len() {
-                let index_count: u32 = if i < self.shapes.shape_offsets.len() - 1 {
-                    self.shapes.shape_offsets[i + 1] - self.shapes.shape_offsets[i]
+            for i in 0..self.shapes.static_shape_offsets.len() {
+                let index_count: u32 = if i < self.shapes.static_shape_offsets.len() - 1 {
+                    self.shapes.static_shape_offsets[i + 1] - self.shapes.static_shape_offsets[i]
                 } else {
-                    (self.shapes.indices.len() as u32) - self.shapes.shape_offsets[i]
+                    (self.shapes.static_indices.len() as u32) - self.shapes.static_shape_offsets[i]
                 };
 
                 render_pass.draw_indexed(index_offset..(index_offset + index_count), 0, 0..1);
                 index_offset += index_count;
+            }
+
+            render_pass.set_vertex_buffer(0, self.dynamic_vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.dynamic_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            let mut dynamic_index_offset = 0;
+            for i in 0..self.shapes.dynamic_shape_offsets.len() {
+                let index_count = if i < self.shapes.dynamic_shape_offsets.len() - 1 {
+                    self.shapes.dynamic_shape_offsets[i + 1] - self.shapes.dynamic_shape_offsets[i]
+                } else {
+                    self.shapes.dynamic_indices.len() as u32 - self.shapes.dynamic_shape_offsets[i]
+                };
+                render_pass.draw_indexed(dynamic_index_offset..dynamic_index_offset + index_count, 0, 0..1);
+                dynamic_index_offset += index_count;
             }
         }
 

@@ -4,48 +4,83 @@ use wgpu::util::DeviceExt;
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct Scene {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-    pub shape_offsets: Vec<u32>,
+    pub static_vertices: Vec<Vertex>,
+    pub static_indices: Vec<u32>,
+    pub static_shape_offsets: Vec<u32>,
+
+    pub dynamic_vertices: Vec<Vertex>,
+    pub dynamic_indices: Vec<u32>,
+    pub dynamic_shape_offsets: Vec<u32>,
 }
 
 impl Scene {
     pub fn new() -> Self {
         Scene {
-            vertices: Vec::new(),
-            indices: Vec::new(),
-            shape_offsets: Vec::new(),
+            static_vertices: Vec::new(),
+            static_indices: Vec::new(),
+            static_shape_offsets: Vec::new(),
+            dynamic_vertices: Vec::new(),
+            dynamic_indices: Vec::new(),
+            dynamic_shape_offsets: Vec::new(),
         }
     }
 
-    pub fn add_shape(&mut self, shape: Shape) {
-        self.shape_offsets.push(self.indices.len() as u32);
+    pub fn add_dynamic_shape(&mut self, shape: Shape) {
+        self.dynamic_shape_offsets.push(self.dynamic_indices.len() as u32);
 
-        let vertex_offset = self.vertices.len();
-        self.vertices.extend(shape.vertices);
+        let vertex_offset = self.dynamic_vertices.len();
+        self.dynamic_vertices.extend(shape.vertices);
 
-        self.indices
+        self.dynamic_indices
             .extend(shape.indices.iter().map(|&v| v + vertex_offset as u32));
     }
 
-    pub fn create_gpu_buffers(&self, device: &wgpu::Device) -> (wgpu::Buffer, wgpu::Buffer) {
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+    pub fn add_static_shape(&mut self, shape: Shape) {
+        self.static_shape_offsets.push(self.static_indices.len() as u32);
+
+        let vertex_offset = self.static_vertices.len();
+        self.static_vertices.extend(shape.vertices);
+
+        self.static_indices
+            .extend(shape.indices.iter().map(|&v| v + vertex_offset as u32));
+    }
+
+    pub fn create_gpu_buffers(
+        &self,
+        device: &wgpu::Device,
+    ) -> ((wgpu::Buffer, wgpu::Buffer), (wgpu::Buffer, wgpu::Buffer)) {
+        let static_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&self.vertices),
+            contents: bytemuck::cast_slice(&self.static_vertices),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let static_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&self.indices),
+            contents: bytemuck::cast_slice(&self.static_indices),
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         });
 
-        (vertex_buffer, index_buffer)
+        let dynamic_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&self.dynamic_vertices),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let dynamic_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&self.dynamic_indices),
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        (
+            (static_vertex_buffer, static_index_buffer),
+            (dynamic_vertex_buffer, dynamic_index_buffer),
+        )
     }
 
     pub fn update_vertex_colors(&mut self) {
-        self.vertices.iter_mut().for_each(Vertex::update);
+        self.dynamic_vertices.iter_mut().for_each(Vertex::update);
     }
 
     pub fn create_3d_border(&mut self, radius: f32, num_subdivisions: u32, center: [f32; 3]) {
@@ -67,7 +102,7 @@ impl Scene {
                 let z = radius * cos_theta + center[2];
 
                 let dot = Shape::sphere(0.015, 16, [x, y, z], [0.411, 0.411, 0.411, 0.3]);
-                self.add_shape(dot);
+                self.add_static_shape(dot);
             }
         }
     }
@@ -81,7 +116,7 @@ impl Scene {
             let x = angle.cos() * radius + center[0];
             let y = angle.sin() * radius + center[1];
             let dot = Shape::sphere(0.015, 32, [x, y, 0.], [0.411, 0.411, 0.411, 0.3]);
-            self.add_shape(dot);
+            self.add_static_shape(dot);
         }
 
         for i in 0..num_subdivisions {
