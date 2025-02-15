@@ -1,7 +1,10 @@
 mod physics;
+mod rendering;
 use std::sync::Arc;
 
-use physics::{Scene, Shape, Vertex};
+use glam::{vec3, Vec3, Vec4};
+use physics::{Scene, Vertex};
+use rendering::{render_objects, BufferManager};
 use std::time::{Duration, Instant};
 use wgpu::{include_wgsl, Color, PipelineCompilationOptions};
 use winit::{
@@ -12,10 +15,10 @@ use winit::{
 };
 
 pub const BORDER_RADIUS: f32 = 0.85;
-pub const BORDER_CENTER: [f32; 3] = [0., 0., 0.];
+pub const BORDER_CENTER: Vec3 = vec3(0., 0., 0.);
 
-        const BALL_RADIUS: f32 = 0.04;
-        const BALL_START: [f32; 3] = [0., 0.75, 0.0];
+const BALL_RADIUS: f32 = 0.04;
+const BALL_START: Vec3 = vec3(0., 0.75, 0.0);
 
 struct State {
     window: Arc<Window>,
@@ -28,10 +31,7 @@ struct State {
 
     scene: Scene,
 
-    static_vertex_buffer: wgpu::Buffer,
-    static_index_buffer: wgpu::Buffer,
-    dynamic_vertex_buffer: wgpu::Buffer,
-    dynamic_index_buffer: wgpu::Buffer,
+    buffers: BufferManager,
 
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
@@ -130,12 +130,11 @@ impl State {
             cache: None,
         });
 
-        let mut scene = Scene::new();
+        let mut scene = Scene::default();
 
         scene.create_3d_border(BORDER_RADIUS, 5, BORDER_CENTER);
-        scene.add_dynamic_shape(Shape::sphere(BALL_RADIUS, 16, BALL_START, [1., 1., 0., 1.]), BALL_RADIUS, BORDER_CENTER);
-
-        let ((svb, sib), (dvb, dib)) = scene.create_gpu_buffers(&device);
+        scene.add_ball(BALL_RADIUS, BALL_START, Vec4::new(1., 1., 0., 1.));
+        scene.add_ball(BALL_RADIUS, Vec3::new(0., 0., 0.), Vec4::new(1., 0., 0., 1.));
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Depth Texture"),
@@ -152,6 +151,7 @@ impl State {
             view_formats: &[],
         });
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let buffers = BufferManager::new(&device, &scene);
 
         let state = State {
             window,
@@ -164,10 +164,7 @@ impl State {
 
             scene,
 
-            static_vertex_buffer: svb,
-            static_index_buffer: sib,
-            dynamic_vertex_buffer: dvb,
-            dynamic_index_buffer: dib,
+            buffers,
 
             depth_texture,
             depth_view,
@@ -178,7 +175,6 @@ impl State {
             current_fps: 0.0,
         };
 
-        // Configure surface for the first time
         state.configure_surface();
 
         state
@@ -206,7 +202,6 @@ impl State {
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.size = new_size;
 
-        // reconfigure the surface
         self.configure_surface();
 
         self.depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -226,18 +221,11 @@ impl State {
         self.depth_view = self.depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
     }
 
-    fn update(&mut self) {
-
-        self.queue.write_buffer(
-            &self.dynamic_vertex_buffer,
-            0,
-            bytemuck::cast_slice(&self.scene.dynamic_vertices),
-        );
-    }
 
     fn render(&mut self) {
-        self.update();
-
+        self.scene.update_physics(1.0);
+        self.scene.update_dynamic_vertices();
+        self.buffers.update_dynamic_buffers(&self.queue, &self.scene);
         // Update FPS calculation
         self.frame_count += 1;
         let now = Instant::now();
@@ -295,33 +283,20 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.static_vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.static_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
 
-            let mut index_offset = 0;
-            for i in 0..self.scene.static_shape_offsets.len() {
-                let index_count: u32 = if i < self.scene.static_shape_offsets.len() - 1 {
-                    self.scene.static_shape_offsets[i + 1] - self.scene.static_shape_offsets[i]
-                } else {
-                    (self.scene.static_indices.len() as u32) - self.scene.static_shape_offsets[i]
-                };
+            render_objects(
+                &mut render_pass,
+                &self.buffers.static_vertex_buffer,
+                &self.buffers.static_index_buffer,
+                &self.scene.static_meshes,
+            );
 
-                render_pass.draw_indexed(index_offset..(index_offset + index_count), 0, 0..1);
-                index_offset += index_count;
-            }
-
-            render_pass.set_vertex_buffer(0, self.dynamic_vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.dynamic_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            let mut dynamic_index_offset = 0;
-            for i in 0..self.scene.dynamic_shape_offsets.len() {
-                let index_count = if i < self.scene.dynamic_shape_offsets.len() - 1 {
-                    self.scene.dynamic_shape_offsets[i + 1] - self.scene.dynamic_shape_offsets[i]
-                } else {
-                    self.scene.dynamic_indices.len() as u32 - self.scene.dynamic_shape_offsets[i]
-                };
-                render_pass.draw_indexed(dynamic_index_offset..dynamic_index_offset + index_count, 0, 0..1);
-                dynamic_index_offset += index_count;
-            }
+            render_objects(
+                &mut render_pass,
+                &self.buffers.dynamic_vertex_buffer,
+                &self.buffers.dynamic_index_buffer,
+                &self.scene.dynamic_meshes,
+            );
         }
 
         // Submit commands
