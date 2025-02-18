@@ -14,6 +14,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
+pub const DT: f32 = 1E-3;
+
 pub const BORDER_RADIUS: f32 = 0.85;
 pub const BORDER_CENTER: Vec3 = vec3(0., 0., 0.);
 
@@ -223,7 +225,7 @@ impl State {
 
 
     fn render(&mut self) {
-        self.scene.update_physics(1.0);
+        self.scene.update_physics(DT);
         self.scene.update_dynamic_vertices();
         self.buffers.update_dynamic_buffers(&self.queue, &self.scene);
         // Update FPS calculation

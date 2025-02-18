@@ -1,3 +1,4 @@
+use crate::{BORDER_CENTER, BORDER_RADIUS};
 use glam::{Vec3, Vec4};
 use std::f32::consts::PI;
 
@@ -5,8 +6,8 @@ use std::f32::consts::PI;
 pub struct PhysicsBody {
     pub pos: Vec3,
     pub radius: f32,
-    pub accel: Vec3,
-    pub old_accel: Vec3,
+    pub velocity: Vec3,
+    pub mass: f32,
 }
 
 impl PhysicsBody {
@@ -14,8 +15,50 @@ impl PhysicsBody {
         Self {
             pos,
             radius,
-            accel: Vec3::ZERO,
-            old_accel: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            mass: 1.0,
+        }
+    }
+
+    pub fn keep_within_border(&mut self) {
+        let distance_from_center = self.pos.distance(BORDER_CENTER);
+        if distance_from_center + self.radius > BORDER_RADIUS {
+            let dir = (self.pos - BORDER_CENTER).normalize();
+            self.pos = BORDER_CENTER + dir * (BORDER_RADIUS - self.radius);
+
+            let normal = -dir;
+            let vel_along_normal = self.velocity.dot(normal);
+            self.velocity -= 2.0 * vel_along_normal * normal;
+            self.velocity *= 0.95; // Elasticity
+        }
+    }
+
+    pub fn collide_with(&mut self, other: &mut PhysicsBody) {
+        let distance = self.pos.distance(other.pos);
+
+        if distance < self.radius + other.radius {
+            let normal = (other.pos - self.pos).normalize();
+
+            let relative_velocity = other.velocity - self.velocity;
+
+            let velocity_along_normal = relative_velocity.dot(normal);
+
+            if velocity_along_normal > 0.0 {
+                return;
+            }
+
+            let restitution = 0.95; // 95% elastic collision
+            let mut impulse_scalar = -(1.0 + restitution) * velocity_along_normal;
+            impulse_scalar /= (1.0 / self.mass) + (1.0 / other.mass);
+
+            let impulse = impulse_scalar * normal;
+            self.velocity -= impulse / self.mass;
+            other.velocity += impulse / other.mass;
+
+            let overlap = (self.radius + other.radius) - distance;
+            let separation_vector = normal * (overlap * 0.5);
+            self.pos -= separation_vector;
+            other.pos += separation_vector;
         }
     }
 }
@@ -78,29 +121,44 @@ impl Scene {
         self.next_dynamic_index += mesh.indices.len();
 
         self.dynamic_meshes.push(mesh);
+
+        self.physics_bodies.push(PhysicsBody::new(center, radius));
     }
 
     pub fn update_physics(&mut self, dt: f32) {
-        for body in &mut self.physics_bodies {
-            todo!("Verlet time");
+        self.physics_bodies.iter_mut().for_each(|b| {
+            let force = Vec3::new(0.0, -9.8 * b.mass, 0.0);
+            b.velocity += force * dt / b.mass;
+        });
+
+        self.physics_bodies.iter_mut().for_each(|b| b.pos += b.velocity * dt);
+
+        const SOLVER_ITERATIONS: usize = 3;
+        for _ in 0..SOLVER_ITERATIONS {
+            self.physics_bodies.iter_mut().for_each(PhysicsBody::keep_within_border);
+
+            for i in 0..self.physics_bodies.len() {
+                let (first, rest) = self.physics_bodies.split_at_mut(i);
+                for b1 in first {
+                    for b2 in rest.iter_mut() {
+                        b1.collide_with(b2);
+                    }
+                }
+            }
         }
     }
 
     pub fn update_dynamic_vertices(&mut self) {
         for (mesh, body) in self.dynamic_meshes.iter_mut().zip(&self.physics_bodies) {
+            let offset = body.pos - mesh.center;
             for vertex in &mut mesh.vertices {
-                let offset = [
-                    vertex.position[0] - body.radius,
-                    vertex.position[1] - body.radius,
-                    vertex.position[2] - body.radius,
-                ];
-
                 vertex.position = [
-                    body.pos[0] + offset[0],
-                    body.pos[1] + offset[1],
-                    body.pos[2] + offset[2],
+                    vertex.position[0] + offset[0],
+                    vertex.position[1] + offset[1],
+                    vertex.position[2] + offset[2],
                 ];
             }
+            mesh.center = body.pos;
         }
     }
 
@@ -126,6 +184,7 @@ pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub buffer_offset: usize,
+    center: Vec3,
 }
 
 impl Mesh {
@@ -176,17 +235,12 @@ impl Mesh {
             vertices,
             indices,
             buffer_offset: 0,
+            center,
         }
     }
 
     #[expect(unused)]
-    pub fn polygon(
-        radius: f32,
-        num_subdivisions: u32,
-        center: [f32; 3],
-        color: [f32; 4],
-        buffer_offset: usize,
-    ) -> Self {
+    pub fn polygon(radius: f32, num_subdivisions: u32, center: Vec3, color: Vec4, buffer_offset: usize) -> Self {
         let mut vertices = Vec::new();
         let angle_increment = (2. * PI) / num_subdivisions as f32;
         let mut indices = Vec::new();
@@ -195,11 +249,7 @@ impl Mesh {
             let angle = i as f32 * angle_increment;
             let x = angle.cos() * radius + center[0];
             let y = angle.sin() * radius + center[1];
-            vertices.push(Vertex {
-                position: [x, y, 0.],
-                color,
-                normal: [0., 1., 0.],
-            });
+            vertices.push(Vertex::new(Vec3::new(x, y, 0.), color, Vec3::new(0., 1., 0.)));
         }
 
         for i in 0..num_subdivisions {
@@ -212,6 +262,7 @@ impl Mesh {
             vertices,
             indices,
             buffer_offset,
+            center,
         }
     }
 }
